@@ -26,6 +26,7 @@ bot.startRTM(function(err,bot,payload) {
 });
 
 controller.setupWebserver(process.env.port,function(err,webserver) {
+
   webserver.get('/',function(req,res) {
     var html = '<h1>Yo</h1>POST to /github_webhooks\n';
     controller.storage.users.all(function(err, all_user_data) {
@@ -34,7 +35,7 @@ controller.setupWebserver(process.env.port,function(err,webserver) {
     res.send(html);
   });
 
-  webserver.post('/github_webhooks', function(req,res) {
+  webserver.post('/github_webhooks', function(req, res) {
     var event = req.get('X-GitHub-Event');
     if(event==='pull_request'){
       if(req.body.action==="opened"){
@@ -51,7 +52,7 @@ controller.setupWebserver(process.env.port,function(err,webserver) {
           }
         };
 
-        getJSON(options, function(statusCode, result){
+        getJSON(options, function(statusCode, result) {
           // console.log("onResult: (" + statusCode + ")" + JSON.stringify(result));
           var obj = {};
           var extensions = [];
@@ -72,9 +73,9 @@ controller.setupWebserver(process.env.port,function(err,webserver) {
           console.log('obj = ', obj)
           console.log('extensions = ', extensions)
 
-          var new_user = findFreeUser(controller);
-          sendToNextUser(new_user)
-
+          var new_user = findFreeUser(controller, obj);
+          // TODO: (((((bot)))))
+          sendToNextUser(bot, new_user)
         });
       } else {
         res.status(200).send('action is not open')
@@ -92,17 +93,6 @@ controller.setupWebserver(process.env.port,function(err,webserver) {
     }
   });
 });
-
-// // give the bot something to listen for.
-// controller.hears('hello',['direct_message'],function(bot,message) {
-//   bot.reply(message, "Hello yourself.\n" );
-// });
-
-// // user need help
-// controller.hears('help',['direct_message'],function(bot,message) {
-//  bot.reply(message,"Hello, if you done a review fill DONE.\n Else if you need confirmation from another reviewer with review fill RECONFIRM.\n Maybe you wouldn't like to make review then fill DECLINE.");
-// });
-
 
 controller.on('direct_message', function(bot, message) {
   var setMeUp = true
@@ -126,52 +116,24 @@ controller.on('direct_message', function(bot, message) {
   }
 });
 
-controller.hears(['question me'], 'direct_message', function(bot,message) {
-
-  // start a conversation to handle this response.
-  bot.startConversation(message, function(err,convo) {
-    sendToNextUser(err, convo, controller)
-
-  //  convo.ask('There is awaiting code review, do you want to accept it? Y/N',[
-  //    {
-  //      pattern: bot.utterances.yes,
-  //      callback: function(response,convo) {
-  //        convo.say("When you're done reviewing type accept/decline/reconfirm");
-  //        // do something else...
-  //        convo.next();
-  //      }
-  //    },
-  //    {
-  //      pattern: bot.utterances.no,
-  //      callback: function(response,convo) {
-  //        convo.say('Oh... I sent this offer to another reviewer.');
-  //        // do something else...
-  //        convo.next();
-  //      }
-  //    }
-  //  ]);
-  // })
-
-});
-
 // user needs reconfirmation of pull request
 // +1
 controller.hears(['reconfirm'],['direct_message','direct_mention','mention'],function(bot,message) {
 
-  // controller.storage.users.get(message.user, function(err, user_data) {
-  //   if (user_data) {
-  //     // znajdź innego usera i przypisz mu issue
-  //     // powiadom nowego usera poprzez bot.startPrivateConversation()
-  //     new_user['assigned'] = user_data['assigned'];
-  //     controller.storage.users.save({id: new_user['id'], user_data}, function(err) {});
+  controller.storage.users.get(message.user, function(err, user_data) {
+    if (user_data) {
+      var new_user = findFreeUser(controller)
+      new_user['assigned'] = user_data['assigned']
+      controller.storage.users.save({id: new_user['id'], user_data}, function(err) {});
 
+      user_data['assigned'] = null;
+      controller.storage.users.save({id: message.user, user_data}, function(err) {});
+    }
+  });
 
-  //     user_data['assigned'] = null;
-  //     controller.storage.users.save({id: message.user, user_data}, function(err) {});
-  //   }
-  // });
+  bot.reply(message,"Thank you for your work. Now I will send this review for confirmation.");
 
- bot.reply(message,"Thank you for your work. Now I sent this review for confirmation.");
+  bot.startConversation(message, new_user.id, sendToNextUser(err,convo))
 });
 
 // user decline review of pull request
@@ -187,54 +149,60 @@ controller.hears(['accept'],['direct_message'],function(bot,message) {
 });
 
 
-// controller.hears(['test'],'direct_message,direct_mention,mention',function(bot, message) {
-//    bot.api.users.getPresence({
-//        token: 'your-api-token',
-//        user: 'U1234567890'
-//    }, function(err, res){
-//        if(res.presence === 'active'){
-//            // active
-//        }else{
-//            // away
-//        }
-//    });
-// });
+function sendToNextUser(bot, user) {
+  bot.startPrivateConversation(user, function(err, convo) {
+    convo.ask('There is awaiting code review, do you want to accept it? Y/N',[
+      {
+        pattern: bot.utterances.yes,
+        callback: function(response,convo) {
+          convo.say("When you're done reviewing type accept/decline/reconfirm");
 
-
-function sendToNextUser(err,convo, controller, user) {
-  if (!user) {
-    user = findFreeUser(controller)
-  }
-  convo.ask('There is awaiting code review, do you want to accept it? Y/N',[
-    {
-      pattern: bot.utterances.yes,
-      callback: function(response,convo) {
-        convo.say("When you're done reviewing type accept/decline/reconfirm");
-
-        convo.next();
-      }
-    },
-     {
-       pattern: bot.utterances.no,
-       callback: function(response,convo) {
-         convo.say('Oh... I sent this offer to another reviewer.');
-         // do something else...
-         convo.next();
+          convo.next();
+        }
+      },
+       {
+         pattern: bot.utterances.no,
+         callback: function(response,convo) {
+           convo.say('Oh... I sent this offer to another reviewer.');
+           // do something else...
+           convo.next();
+         }
        }
-     }
-   ]);
+     ]);
+  }
 };
 
 function findFreeUser(controller, extensions) {
-  // find free user
+  var mostCommonExtention = undefined;
+  if(extensions){
+    mostCommonExtention ={
+      extention:'',
+      size:0
+    }
+    for(extention in obj){
+      if(mostCommonExtention.size < obj[extention].length){
+        mostCommonExtention = {
+          extention:extention,
+          count:obj[extention].length
+        }
+      }
+    }
+  }
+  var bestUser = undefined;
   controller.storage.users.all(function(err, all_user_data) {
     for(var i=0; i < all_user_data.length; i++) {
       if (all_user_data[i]['assigned'] !== true) {
-        console.log('znaleziono usera', all_user_data[i]);
-        return all_user_data[i]
+        if(mostCommonExtention){
+          if(all_user_data[i].extentions[mostCommonExtention.extention]){
+            return all_user_data[i]
+          }
+        } else {
+          bestUser = all_user_data[i]
+        }
       }
     }
   });
+  return bestUser;
 }
 
 function getJSON(options, onResult){
@@ -260,3 +228,33 @@ function getJSON(options, onResult){
 
   req.end();
 };
+
+
+
+
+
+
+
+// controller.hears(['test'],'direct_message,direct_mention,mention',function(bot, message) {
+//    bot.api.users.getPresence({
+//        token: 'your-api-token',
+//        user: 'U1234567890'
+//    }, function(err, res){
+//        if(res.presence === 'active'){
+//            // active
+//        }else{
+//            // away
+//        }
+//    });
+// });
+
+
+// // give the bot something to listen for.
+// controller.hears('hello',['direct_message'],function(bot,message) {
+//   bot.reply(message, "Hello yourself.\n" );
+// });
+
+// // user need help
+// controller.hears('help',['direct_message'],function(bot,message) {
+//  bot.reply(message,"Hello, if you done a review fill DONE.\n Else if you need confirmation from another reviewer with review fill RECONFIRM.\n Maybe you wouldn't like to make review then fill DECLINE.");
+// });
