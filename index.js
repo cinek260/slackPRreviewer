@@ -34,7 +34,7 @@ controller.setupWebserver(process.env.port,function(err,webserver) {
     res.send(html);
   });
 
-  webserver.post('/github_webhooks',function(req,res) {
+  webserver.post('/github_webhooks', function(req,res) {
     var event = req.get('X-GitHub-Event');
     if(event==='pull_request'){
       if(req.body.action==="opened"){
@@ -46,14 +46,35 @@ controller.setupWebserver(process.env.port,function(err,webserver) {
           path: req.body.pull_request.url.substring(22) + '/files',
           method: 'GET',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'User-Agent': 'GotardApp'
           }
         };
 
         getJSON(options, function(statusCode, result){
-          console.log("onResult: (" + statusCode + ")" + JSON.stringify(result));
-          res.statusCode = statusCode;
-          res.send(result);
+          // console.log("onResult: (" + statusCode + ")" + JSON.stringify(result));
+          var obj = {};
+          var extensions = [];
+
+          result.forEach(function(item){
+            var fileNameArray = item.filename.split('.')
+            var extention = fileNameArray[fileNameArray.length-1];
+            if(obj[extention] !== undefined){
+              obj[extention].push(item.filename)
+            } else {
+              obj[extention] = [];
+              obj[extention].push(item.filename)
+            }
+          });
+          for(extention in obj){
+            extensions.push(extention);
+          }
+          console.log('obj = ', obj)
+          console.log('extensions = ', extensions)
+
+          var new_user = findFreeUser(controller);
+          sendToNextUser(new_user)
+
         });
       } else {
         res.status(200).send('action is not open')
@@ -74,7 +95,7 @@ controller.setupWebserver(process.env.port,function(err,webserver) {
 
 // // give the bot something to listen for.
 // controller.hears('hello',['direct_message'],function(bot,message) {
-//   bot.reply(message,"Hello yourself.\n" );
+//   bot.reply(message, "Hello yourself.\n" );
 // });
 
 // // user need help
@@ -83,58 +104,73 @@ controller.setupWebserver(process.env.port,function(err,webserver) {
 // });
 
 
+controller.on('direct_message', function(bot, message) {
+  var setMeUp = true
+  if (message) {
+    controller.storage.users.get(message.user, function(err, user_data) {
+      if (user_data) {
+        setMeUp = false
+      }
+    });
 
-// controller.on('direct_message', function(bot, message) {
-//   var set_up_user = true
-//   if (message) {
-//     controller.storage.users.get(id, function(err, user_data) {
-//       if (user_data) {
-//         set_up_user = false
-//       }
-//     });
+    controller.storage.users.save({id: message.user, saved: true}, function(err) {});
 
-//     controller.storage.users.save({id: message.user, saved: true}, function(err) {
-//       bot.reply(message,"Saved info about you" );
-//     });
+    if (setMeUp) {
+      bot.reply(message, "Hello there, let's set you up!" );
+    } else {
+      bot.reply(message, "You are set up" );
+    }
 
-//     if (set_up_user) {
-//       bot.reply(message,"Hello there, let's set you up!" );
-//     } else {
-//       bot.reply(message,"You are set up" );
-//     }
-//   }
-// });
+    var new_user = findFreeUser(controller);
+    // TODO
+  }
+});
 
 controller.hears(['question me'], 'direct_message', function(bot,message) {
 
   // start a conversation to handle this response.
   bot.startConversation(message, function(err,convo) {
+    sendToNextUser(err, convo, controller)
 
-   convo.ask('There is awaiting code review, do you want to accept it? Y/N',[
-     {
-       pattern: bot.utterances.yes,
-       callback: function(response,convo) {
-         convo.say("When you're done reviewing type accept/decline/reconfirm");
-         // do something else...
-         convo.next();
-       }
-     },
-     {
-       pattern: bot.utterances.no,
-       callback: function(response,convo) {
-         convo.say('Oh... I sent this offer to another reviewer.');
-         // do something else...
-         convo.next();
-       }
-     }
-   ]);
-  })
+  //  convo.ask('There is awaiting code review, do you want to accept it? Y/N',[
+  //    {
+  //      pattern: bot.utterances.yes,
+  //      callback: function(response,convo) {
+  //        convo.say("When you're done reviewing type accept/decline/reconfirm");
+  //        // do something else...
+  //        convo.next();
+  //      }
+  //    },
+  //    {
+  //      pattern: bot.utterances.no,
+  //      callback: function(response,convo) {
+  //        convo.say('Oh... I sent this offer to another reviewer.');
+  //        // do something else...
+  //        convo.next();
+  //      }
+  //    }
+  //  ]);
+  // })
 
 });
 
 // user needs reconfirmation of pull request
 // +1
 controller.hears(['reconfirm'],['direct_message','direct_mention','mention'],function(bot,message) {
+
+  // controller.storage.users.get(message.user, function(err, user_data) {
+  //   if (user_data) {
+  //     // znajdź innego usera i przypisz mu issue
+  //     // powiadom nowego usera poprzez bot.startPrivateConversation()
+  //     new_user['assigned'] = user_data['assigned'];
+  //     controller.storage.users.save({id: new_user['id'], user_data}, function(err) {});
+
+
+  //     user_data['assigned'] = null;
+  //     controller.storage.users.save({id: message.user, user_data}, function(err) {});
+  //   }
+  // });
+
  bot.reply(message,"Thank you for your work. Now I sent this review for confirmation.");
 });
 
@@ -149,6 +185,57 @@ controller.hears(['decline'],['direct_message'],function(bot,message) {
 controller.hears(['accept'],['direct_message'],function(bot,message) {
  bot.reply(message,"Thank you! You have 1 more point in your stats.");
 });
+
+
+// controller.hears(['test'],'direct_message,direct_mention,mention',function(bot, message) {
+//    bot.api.users.getPresence({
+//        token: 'your-api-token',
+//        user: 'U1234567890'
+//    }, function(err, res){
+//        if(res.presence === 'active'){
+//            // active
+//        }else{
+//            // away
+//        }
+//    });
+// });
+
+
+function sendToNextUser(err,convo, controller, user) {
+  if (!user) {
+    user = findFreeUser(controller)
+  }
+  convo.ask('There is awaiting code review, do you want to accept it? Y/N',[
+    {
+      pattern: bot.utterances.yes,
+      callback: function(response,convo) {
+        convo.say("When you're done reviewing type accept/decline/reconfirm");
+
+        convo.next();
+      }
+    },
+     {
+       pattern: bot.utterances.no,
+       callback: function(response,convo) {
+         convo.say('Oh... I sent this offer to another reviewer.');
+         // do something else...
+         convo.next();
+       }
+     }
+   ]);
+};
+
+function findFreeUser(controller, extensions) {
+  // find free user
+  controller.storage.users.all(function(err, all_user_data) {
+    for(var i=0; i < all_user_data.length; i++) {
+      if (all_user_data[i]['assigned'] !== true) {
+        console.log('znaleziono usera', all_user_data[i]);
+        return all_user_data[i]
+      }
+    }
+  });
+}
 
 function getJSON(options, onResult){
   var prot = options.port == 443 ? https : http;
